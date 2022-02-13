@@ -2,8 +2,11 @@
 from typing import Dict, List, Set, Optional, Iterable, Tuple
 from enum import Enum
 from dataclasses import dataclass
+import copy
+import sys
 import re
 
+import pandas as pd
 import numpy as np
 
 
@@ -47,7 +50,48 @@ class PositionState:
         self.possible_letters = set(letter)
 
 
+class WordState:
+    def __init__(self, word_length: int = WORD_LENGTH):
+        self.word_length = word_length
+        self.state = [PositionState() for _ in range(self.word_length)]
+
+    def update_state(self, guess_response: List[LetterGuess]):
+        for position, guess in enumerate(guess_response):
+            # update the knowledge about the position
+            if guess.state == GuessState.CORRECT:
+                self.state[position].set_letter(guess.letter)
+            elif guess.state == GuessState.IN_WORD:
+                self.state[position].remove_letter(guess.letter)
+            elif guess.state == GuessState.NOT_IN_WORD:
+                for letter_state in self.state:
+                    letter_state.remove_letter(guess.letter)
+
+    def get_possible_words(self, word_list: Iterable[str]) -> Set[str]:
+        """Filter word_list to possible words given current information obtained from
+        guesses."""
+
+        pattern = re.compile(
+            "".join(
+                [
+                    f"[{''.join([letter for letter in position.possible_letters])}]"
+                    for position in self.state
+                ]
+            )
+        )
+
+        def _test_word(w: str) -> bool:
+            for letter_state, letter in zip(self.state, w):
+                if letter not in letter_state.possible_letters:
+                    return False
+            return True
+
+        possible_words = set([word for word in word_list if _test_word(word)])
+        return possible_words
+
+
 class WordScorer:
+    """Interface for classes that score words"""
+
     def update(self, wordle_bot: "WordleBot") -> None:
         """Update will be called whenever WordleBot knowledge changes"""
         pass
@@ -74,7 +118,7 @@ class WordleBot:
         self.word_to_freq = word_to_freq
         self.word_scorer = word_scorer
         self.letter_state = {letter: LetterState.UNKNOWN for letter in ALPHABET}
-        self.word: List[PositionState] = [PositionState() for _ in range(WORD_LENGTH)]
+        self.word_state = WordState()
         self.guess_idx: int = 0
 
         self.possible_words = set(word_to_freq.keys())
@@ -89,14 +133,8 @@ class WordleBot:
                 self.letter_state[guess.letter] = LetterState.NOT_IN_WORD
             else:
                 self.letter_state[guess.letter] = LetterState.IN_WORD
-            # update the knowledge about the position
-            if guess.state == GuessState.CORRECT:
-                self.word[position].set_letter(guess.letter)
-            elif guess.state == GuessState.IN_WORD:
-                self.word[position].remove_letter(guess.letter)
-            elif guess.state == GuessState.NOT_IN_WORD:
-                for state in self.word:
-                    state.remove_letter(guess.letter)
+
+            self.word_state.update_state(guess_response)
         self._update_possible_words()
 
     @property
@@ -104,25 +142,7 @@ class WordleBot:
         return set(self.word_to_freq.keys())
 
     def _update_possible_words(self):
-        self.possible_words = self.get_possible_words(self.possible_words)
-
-    def get_possible_words(self, word_list: Optional[Iterable[str]] = None) -> Set[str]:
-        """Filter word_list to possible words given current information obtained from
-        guesses.  If word_list is omitted, start from all possible words in the original
-        frequency mapping."""
-        if word_list is None:
-            word_list = self.all_words
-
-        pattern = re.compile(
-            "".join(
-                [
-                    f"[{''.join([letter for letter in position.possible_letters])}]"
-                    for position in self.word
-                ]
-            )
-        )
-        possible_words = set([word for word in word_list if pattern.match(word)])
-        return possible_words
+        self.possible_words = self.word_state.get_possible_words(self.possible_words)
 
     def _score_words(self, word_list: Iterable[str]) -> List[Tuple[str, float]]:
         self.word_scorer.update(self)
@@ -163,6 +183,7 @@ class FrequencyWordScorer(WordScorer):
         self.lidx_lookup = {letter: lidx for lidx, letter in enumerate(ALPHABET)}
 
     def _calc_frequency_table(self, possible_words) -> np.ndarray:
+        print(f"There are {len(possible_words)} possible words")
         letter_count_table = np.zeros([WORD_LENGTH, len(ALPHABET)])
         for word in possible_words:
             for lidx, letter in enumerate(word):
@@ -175,13 +196,16 @@ class FrequencyWordScorer(WordScorer):
         # set zero value for letter/position combos we know can't work
         for letter in ALPHABET:
             for lidx in range(WORD_LENGTH):
-                letter_state = wordle_bot.word[lidx]
+                letter_state = wordle_bot.word_state.state[lidx]
                 if (
                     letter not in letter_state.possible_letters
                     or len(letter_state.possible_letters) == 1
                 ):
                     self.letter_frequency[lidx, self.lidx_lookup[letter]] = 0
-        print(self.letter_frequency)
+        self.print_pretty_letter_frequency()
+
+    def print_pretty_letter_frequency(self):
+        print(pd.DataFrame(self.letter_frequency, columns=list(ALPHABET)))
 
     def _score_letter(self, lidx: int, letter: str) -> float:
         return self.letter_frequency[lidx, self.lidx_lookup[letter]]
@@ -197,8 +221,39 @@ class FrequencyWordScorer(WordScorer):
         return score
 
 
+class BruteForceWordScorer(WordScorer):
+    def __init__(self):
+        pass
+
+    def update(self, wordle_bot: WordleBot) -> None:
+        self.possible_words = set(wordle_bot.possible_words)
+        self.word_state = copy.deepcopy(wordle_bot.word_state)
+
+    def _calc_updated_possible_words(
+        self, possible_words: Set[str], true_word: str, guess_word: str
+    ) -> Set[str]:
+        """given a set of possible words and the true word, return the updated set of
+        possible words once 'guess_word' is guessed"""
+        word_state = copy.deepcopy(wordle_bot.word_state)
+        word_state.update_state(generate_guess_response(guess_word, true_word))
+        return word_state.get_possible_words(possible_words)
+
+    def score_word(self, word: str) -> float:
+        score = 0
+        for true_word in self.possible_words:
+            # check how many words remain if true_word is actually the true_word
+            remaining_words = self._calc_updated_possible_words(
+                set(self.possible_words), true_word=true_word, guess_word=word
+            )
+            removed_words = len(self.possible_words) - len(remaining_words)
+            score += removed_words
+        normalized_score = score / len(self.possible_words) ** 2
+        sys.stdout.write(".")
+        sys.stdout.flush()
+        return normalized_score
+
+
 if __name__ == "__main__":
-    import pandas as pd
 
     wordle_word_freq = pd.read_csv("wordle_word_freq.csv")
     word_to_freq = {
@@ -211,3 +266,8 @@ if __name__ == "__main__":
     word_scorer = FrequencyWordScorer()
     wordle_bot = WordleBot(word_to_freq=word_to_freq, word_scorer=word_scorer)
     wordle_bot.play_word("elder")
+
+    # word_scorer = BruteForceWordScorer()
+    # wordle_bot = WordleBot(word_to_freq=word_to_freq, word_scorer=word_scorer)
+    # scored_words = wordle_bot._score_words(wordle_bot.all_words)
+    # print(scored_words[:10])
