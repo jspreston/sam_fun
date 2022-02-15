@@ -1,4 +1,5 @@
 # Initial work on wordle automation
+from ctypes.wintypes import WORD
 from typing import Dict, List, Set, Optional, Iterable, Tuple
 from enum import Enum
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ class WordState:
     def __init__(self, word_length: int = WORD_LENGTH):
         self.word_length = word_length
         self.state = [PositionState() for _ in range(self.word_length)]
+        self.required_letters = set()
 
     def update_state(self, guess_response: List[LetterGuess]):
         for position, guess in enumerate(guess_response):
@@ -62,6 +64,7 @@ class WordState:
                 self.state[position].set_letter(guess.letter)
             elif guess.state == GuessState.IN_WORD:
                 self.state[position].remove_letter(guess.letter)
+                self.required_letters.add(guess.letter)
             elif guess.state == GuessState.NOT_IN_WORD:
                 for letter_state in self.state:
                     letter_state.remove_letter(guess.letter)
@@ -70,16 +73,20 @@ class WordState:
         """Filter word_list to possible words given current information obtained from
         guesses."""
 
-        pattern = re.compile(
-            "".join(
-                [
-                    f"[{''.join([letter for letter in position.possible_letters])}]"
-                    for position in self.state
-                ]
-            )
-        )
+        # pattern = re.compile(
+        #     "".join(
+        #         [
+        #             f"[{''.join([letter for letter in position.possible_letters])}]"
+        #             for position in self.state
+        #         ]
+        #     )
+        # )
 
         def _test_word(w: str) -> bool:
+            # if all of the required letters aren't in w, return False
+            if self.required_letters.difference(set(w)):
+                return False
+            # if any position has a violation, return False
             for letter_state, letter in zip(self.state, w):
                 if letter not in letter_state.possible_letters:
                     return False
@@ -151,7 +158,8 @@ class WordleBot:
         return scored_words
 
     def suggest(self) -> str:
-        scored = self._score_words(self.all_words)
+        words = self.all_words if len(self.possible_words) > 2 else self.possible_words
+        scored = self._score_words(words)
         word, score = scored[0]
         print(f"suggested word {word} has score {score}")
         return word
@@ -184,6 +192,10 @@ class FrequencyWordScorer(WordScorer):
 
     def _calc_frequency_table(self, possible_words) -> np.ndarray:
         print(f"There are {len(possible_words)} possible words")
+        if len(possible_words) < 10:
+            print(possible_words)
+        else:
+            print("too many to print...")
         letter_count_table = np.zeros([WORD_LENGTH, len(ALPHABET)])
         for word in possible_words:
             for lidx, letter in enumerate(word):
@@ -253,6 +265,78 @@ class BruteForceWordScorer(WordScorer):
         return normalized_score
 
 
+class FastBruteForceWordScorer(WordScorer):
+    def __init__(self, all_words: List[str]):
+        self.letter_to_index = {letter: idx for idx, letter in enumerate(ALPHABET)}
+        self.all_words = list(all_words)
+        self.all_words_array = self._word_list_to_array(self.all_words)
+
+    def _word_list_to_array(self, word_list: List[str]) -> np.ndarray:
+        word_array = np.zeros((len(word_list), WORD_LENGTH), dtype=np.int8)
+        for widx, word in enumerate(word_list):
+            word_array[widx, :] = self._word_to_indices(word)
+        return word_array
+
+    def _word_to_indices(self, word: str) -> np.ndarray:
+        return np.array(
+            [self.letter_to_index[letter] for letter in word], dtype=np.int8
+        )
+
+    def update(self, wordle_bot: WordleBot) -> None:
+        self.possible_words = list(wordle_bot.possible_words)
+        self.possible_words_array = self._word_list_to_array(self.possible_words)
+
+    def _calc_letter_state(
+        self, true_word_array: np.ndarray, guess_word_array: np.ndarray
+    ):
+        """create internal numpy arrays"""
+        letter_state = np.ones((WORD_LENGTH, len(ALPHABET)), dtype=np.bool8)
+        required_letters = set()
+        # guess_array = self._word_to_indices(guess_word)
+        # true_array = self._word_to_indices(true_word)
+        for letter_pos, (true_idx, guess_idx) in enumerate(
+            zip(true_word_array, guess_word_array)
+        ):
+            if guess_idx == true_idx:
+                # only this letter can be true at this position
+                letter_state[letter_pos, :] = False
+                letter_state[letter_pos, guess_idx] = True
+            elif np.any(guess_idx == true_word_array):
+                # guess letter can't be at this position
+                letter_state[letter_pos, guess_idx] = False
+                required_letters.add(guess_idx)
+            else:
+                # this letter can't be at any position
+                letter_state[:, guess_idx] = False
+
+        self.letter_state = letter_state
+        self.required_letters = required_letters
+
+    def score_word(self, word: str) -> float:
+        score = 0
+        guess_word_array = self._word_to_indices(word)
+        letter_positions = np.arange(WORD_LENGTH, dtype=np.int8)
+        for true_idx in range(len(self.possible_words)):
+            true_word_array = self.possible_words_array[true_idx]
+            self._calc_letter_state(
+                true_word_array=true_word_array, guess_word_array=guess_word_array
+            )
+            for test_idx in range(len(self.possible_words)):
+                # check if it contains letters we know to be absent
+                test_word = self.possible_words_array[test_idx]
+                # if the word is missing letters that are required
+                if self.required_letters.difference(set(test_word)):
+                    score += 1
+                # if any of the letters can't occur at the given position
+                elif not np.all(self.letter_state[letter_positions, test_word]):
+                    score += 1
+
+        normalized_score = score / len(self.possible_words) ** 2
+        sys.stdout.write(".")
+        sys.stdout.flush()
+        return normalized_score
+
+
 if __name__ == "__main__":
 
     wordle_word_freq = pd.read_csv("wordle_word_freq.csv")
@@ -265,9 +349,9 @@ if __name__ == "__main__":
 
     word_scorer = FrequencyWordScorer()
     wordle_bot = WordleBot(word_to_freq=word_to_freq, word_scorer=word_scorer)
-    wordle_bot.play_word("elder")
+    wordle_bot.play_word("ultra")
 
-    # word_scorer = BruteForceWordScorer()
+    # word_scorer = FastBruteForceWordScorer(list(word_to_freq.keys()))
     # wordle_bot = WordleBot(word_to_freq=word_to_freq, word_scorer=word_scorer)
     # scored_words = wordle_bot._score_words(wordle_bot.all_words)
     # print(scored_words[:10])
