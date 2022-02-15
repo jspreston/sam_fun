@@ -1,4 +1,4 @@
-from .wordlebot import WordleBot, FrequencyWordScorer
+from .wordlebot import WordleBot, FrequencyWordScorer, GuessState
 from .brute_force_scorer import BruteForceWordScorer, FastBruteForceWordScorer
 
 __all__ = [
