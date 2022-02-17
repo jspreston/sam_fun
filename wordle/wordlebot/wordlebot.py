@@ -1,5 +1,4 @@
 # Initial work on wordle automation
-from ctypes.wintypes import WORD
 from typing import Dict, List, Set, Iterable, Tuple
 from enum import Enum
 from dataclasses import dataclass
