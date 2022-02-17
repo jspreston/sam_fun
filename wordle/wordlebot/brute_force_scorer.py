@@ -2,7 +2,13 @@ from typing import Set, List
 import copy
 import sys
 
-from .wordlebot import WordScorer, WordleBot, generate_guess_response, ALPHABET, WORD_LENGTH
+from .wordlebot import (
+    WordScorer,
+    WordleBot,
+    generate_guess_response,
+    ALPHABET,
+    WORD_LENGTH,
+)
 
 import numpy as np
 
@@ -33,9 +39,10 @@ class BruteForceWordScorer(WordScorer):
             )
             removed_words = len(self.possible_words) - len(remaining_words)
             score += removed_words
+            # make sure to score finding the true word as well
+            if word == true_word:
+                score += 1
         normalized_score = score / len(self.possible_words) ** 2
-        sys.stdout.write(".")
-        sys.stdout.flush()
         return normalized_score
 
 
@@ -106,7 +113,4 @@ class FastBruteForceWordScorer(WordScorer):
                     score += 1
 
         normalized_score = score / len(self.possible_words) ** 2
-        sys.stdout.write(".")
-        sys.stdout.flush()
         return normalized_score
-

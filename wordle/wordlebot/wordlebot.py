@@ -1,11 +1,10 @@
 # Initial work on wordle automation
 from ctypes.wintypes import WORD
-from typing import Dict, List, Set, Optional, Iterable, Tuple
+from typing import Dict, List, Set, Iterable, Tuple
 from enum import Enum
 from dataclasses import dataclass
 
-import pandas as pd
-import numpy as np
+import tqdm
 
 
 class LetterState(Enum):
@@ -32,6 +31,13 @@ WORD_LENGTH = 5
 class LetterGuess:
     letter: str
     state: GuessState
+
+
+EMOJI_MAP = {
+    GuessState.CORRECT: "🟩",
+    GuessState.IN_WORD: "🟨",
+    GuessState.NOT_IN_WORD: "⬜",
+}
 
 
 class PositionState:
@@ -123,12 +129,14 @@ class WordleBot:
         self.word_scorer = word_scorer
         self.letter_state = {letter: LetterState.UNKNOWN for letter in ALPHABET}
         self.word_state = WordState()
-        self.guess_idx: int = 0
+        self.guess_history: List[List[LetterGuess]] = []
 
         self.possible_words = set(word_to_freq.keys())
 
     def guess(self, guess_response: List[LetterGuess]) -> None:
-        self.guess_idx += 1
+
+        self.guess_history.append(guess_response)
+
         for position, guess in enumerate(guess_response):
             if position >= WORD_LENGTH:
                 raise ValueError("Wrong length guess?")
@@ -150,7 +158,10 @@ class WordleBot:
 
     def _score_words(self, word_list: Iterable[str]) -> List[Tuple[str, float]]:
         self.word_scorer.update(self)
-        scored_words = [(word, self.word_scorer.score_word(word)) for word in word_list]
+        scored_words = [
+            (word, self.word_scorer.score_word(word))
+            for word in tqdm.tqdm(word_list, desc="Finding suggestion")
+        ]
         scored_words.sort(reverse=True, key=lambda x: x[1])
         return scored_words
 
@@ -160,71 +171,3 @@ class WordleBot:
         word, score = scored[0]
         print(f"suggested word {word} has score {score}")
         return word
-
-    def play_word(self, true_word) -> int:
-        """play a fake game against 'true_word', and return the number of tries needed to win"""
-        for guess_idx in range(6):
-            guess_word = self.suggest()
-            print(f"playing word {guess_word}")
-            guess_response = generate_guess_response(
-                guess_word=guess_word, true_word=true_word
-            )
-            if all(
-                [
-                    letter_response.state == GuessState.CORRECT
-                    for letter_response in guess_response
-                ]
-            ):
-                print(f"WordleBot won in {guess_idx} guesses!")
-                return guess_idx
-            self.guess(guess_response=guess_response)
-
-        print("Oh no! WordleBot failed!")
-        return -1
-
-
-class FrequencyWordScorer(WordScorer):
-    def __init__(self):
-        self.lidx_lookup = {letter: lidx for lidx, letter in enumerate(ALPHABET)}
-
-    def _calc_frequency_table(self, possible_words) -> np.ndarray:
-        print(f"There are {len(possible_words)} possible words")
-        if len(possible_words) < 10:
-            print(possible_words)
-        else:
-            print("too many to print...")
-        letter_count_table = np.zeros([WORD_LENGTH, len(ALPHABET)])
-        for word in possible_words:
-            for lidx, letter in enumerate(word):
-                letter_count_table[lidx, self.lidx_lookup[letter]] += 1
-        return letter_count_table / len(possible_words)
-
-    def update(self, wordle_bot: WordleBot) -> None:
-        possible_words = wordle_bot.possible_words
-        self.letter_frequency = self._calc_frequency_table(possible_words)
-        # set zero value for letter/position combos we know can't work
-        for letter in ALPHABET:
-            for lidx in range(WORD_LENGTH):
-                letter_state = wordle_bot.word_state.state[lidx]
-                if (
-                    letter not in letter_state.possible_letters
-                    or len(letter_state.possible_letters) == 1
-                ):
-                    self.letter_frequency[lidx, self.lidx_lookup[letter]] = 0
-        self.print_pretty_letter_frequency()
-
-    def print_pretty_letter_frequency(self):
-        print(pd.DataFrame(self.letter_frequency, columns=list(ALPHABET)))
-
-    def _score_letter(self, lidx: int, letter: str) -> float:
-        return self.letter_frequency[lidx, self.lidx_lookup[letter]]
-
-    def score_word(self, word: str) -> float:
-        score = 0
-        used_letters = set()
-        for lidx, letter in enumerate(word):
-            if letter in used_letters:
-                continue
-            used_letters.add(letter)
-            score += self._score_letter(lidx, letter)
-        return score

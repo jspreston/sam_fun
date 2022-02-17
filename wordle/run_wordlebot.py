@@ -53,6 +53,8 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unknown scorer {args.scorer}")
 
+    guesses = []
+
     # word_scorer = FrequencyWordScorer()
     wordle_bot = WordleBot(word_to_freq=word_to_freq, word_scorer=word_scorer)
     while True:
