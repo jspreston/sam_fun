@@ -1,5 +1,6 @@
 import argparse
 from typing import List
+from pathlib import Path
 
 from wordlebot.wordlebot import GuessState, LetterGuess, LetterState, GuessState
 from wordlebot import (
@@ -30,19 +31,26 @@ def input_to_word_response(user_input) -> List[LetterGuess]:
     return letter_responses
 
 
+CUR_DIR = Path(__file__).parent
+RESOURCE_DIR = CUR_DIR / "resources"
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--scorer", default="brute_force")
     args = parser.parse_args()
 
-    wordle_word_freq = pd.read_csv("wordle_word_freq.csv")
-    word_to_freq = {
-        word: freq
-        for word, freq in zip(
-            wordle_word_freq.word.values, wordle_word_freq["count"].values
-        )
-    }
+    # wordle_word_freq = pd.read_csv("wordle_word_freq.csv")
+    # word_to_freq = {
+    #     word: freq
+    #     for word, freq in zip(
+    #         wordle_word_freq.word.values, wordle_word_freq["count"].values
+    #     )
+    # }
+
+    # read csv with one column and set column name to "word"
+    wordle_words = pd.read_csv(RESOURCE_DIR / "word-bank.csv", names=["word"])
+    word_to_freq = {word: 1 for word in wordle_words.word.values}
 
     if args.scorer == "brute_force":
         word_scorer = BruteForceWordScorer()

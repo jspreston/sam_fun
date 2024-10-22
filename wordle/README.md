@@ -1,7 +1,9 @@
 # Files
 
 ## data
-
+- valid-words.csv: list of words wordle will accept as guesses
+- word-bank.csv: list of words that can be selected as the "true" word
+### OLD
 - `unigram_frequency.csv`: English word frequency from kaggle
 - `wordle_archive_words.csv`: Set of words selected by wordle in 2022
 - `wordle_word_freq.csv`: Output set of likely wordle words and frequency, created by `create_wordle_frequency.py`.
